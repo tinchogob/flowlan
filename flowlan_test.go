@@ -160,6 +160,22 @@ func TestRun(t *testing.T) {
 				return []interface{}{(*task)(nil), "hola"}
 			},
 		},
+		{
+			name: "Task/Do/return errors",
+			tasks: func() []*task {
+				return []*task{
+					Task("p_1").Do(func() (*task, error) {
+						return nil, io.ErrUnexpectedEOF
+					}),
+					Task("p_2").After("p_1").Do(func(s1 *task, e1 error) int {
+						return 5
+					}),
+				}
+			},
+			results: func() []interface{} {
+				return []interface{}{(*task)(nil), io.ErrUnexpectedEOF, 5}
+			},
+		},
 		//{
 		//	name: "Flow/After/wrong dependency",
 		//	tasks: func() []*task {
