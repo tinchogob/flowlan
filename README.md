@@ -29,8 +29,6 @@ Built on top of go channels (with some reflection magic) as an excersise for go 
 
 _Do not communicate by sharing memory; instead, share memory by communicating._
 
-Caution: calling a function via reflection in go is [slow!](https://github.com/golang/go/issues/7818) and this makes heavy use of it
-
 TODO list
 - Do: support for variadic functions
 - Do: support for timeout
