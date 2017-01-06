@@ -1,7 +1,7 @@
 # Flowlan
 #### simple flow orchestration for go
 
-Flowlan provides a simple abstraction to execute an arbitrarily complex graph of function and dependencies.
+Flowlan provides a simple abstraction to execute an arbitrarily complex graph of dependable functions.
 Simply declare a Task, its dependencies and its execution.
 
 ```golang
@@ -25,7 +25,7 @@ func main() {
 }
 ```
 
-Built on top of go channels (with some reflection in place) as an excersise for go proverb:
+Built on top of go channels (with some reflection magic) as an excersise for go proverb:
 
 _Do not communicate by sharing memory; instead, share memory by communicating._
 
