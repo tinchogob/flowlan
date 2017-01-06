@@ -1,66 +1,98 @@
 package flowlan
 
+import (
+	"fmt"
+)
 
-func Run(tasks ...*Task) map[string]interface{} {
+var debug bool = true
+
+func log(format string, a ...interface{}) {
+	if debug {
+		fmt.Printf(format+"\n", a...)
+	}
+}
+
+func Run(tasks ...*task) (map[string]interface{}, error) {
 
 	var deps []string
 	for _, t := range tasks {
-		deps = append(deps, t.Name)
+		deps = append(deps, t.name)
 	}
 
-	tasks = append(tasks, &Task{
-		Deps: deps,
-		Fx: func(args map[string]interface{}) (interface{}, error) {
+	//Append a final task that depends on all tasks and collects results
+	tasks = append(tasks, &task{
+		dependencies: deps,
+		fx: func(args map[string]interface{}) (interface{}, error) {
 			return args, nil
 		},
 		out: []chan interface{}{make(chan interface{})},
 	})
 
-	for _, t := range tasks {
-		if len(t.Deps) > 0 {
-			for _, dep := range t.Deps {
-				for _, t2 := range tasks {
-					if dep != "" && dep == t2.Name {
-						pipe := make(chan interface{})
-						t.in = append(t.in, pipe)
-						t2.out = append(t2.out, pipe)
-					}
+	//do plumbing to connect dependant tasks in/out via channels
+	for _, task := range tasks {
+		for _, dependencyName := range task.dependencies {
+			for _, dependency := range tasks {
+				if dependencyName == dependency.name {
+					pipe := make(chan interface{})
+					dependency.out = append(dependency.out, pipe)
+					task.in = append(task.in, pipe)
+					log("connecting %s out with %s in", dependency.name, task.name)
 				}
 			}
 		}
 	}
 
-	for _, iter := range tasks {
-		t := iter
-		go func() {
-			args := make(map[string]interface{})
-			if len(t.Deps) > 0 {
-				for i, in := range t.in {
-					dep := <-in
-					args[t.Deps[i]] = dep
-				}
-
-			}
-
-			v, err := t.Fx(args)
-
-			if v != nil && err == nil && len(t.out) > 0 {
-				for _, out := range t.out {
-					out <- v
-				}
-			}
-		}()
+	for _, task := range tasks {
+		go task.run()
 	}
 
 	res := <-tasks[len(tasks)-1].out[0]
 
-	return res.(map[string]interface{})
+	return res.(map[string]interface{}), nil
 }
 
-type Task struct {
-	Name  string
-	Deps  []string
-	in    []chan interface{}
-	out   []chan interface{}
-	Fx    func(args map[string]interface{}) (interface{}, error)
+func Task(name string) *task {
+	return &task{
+		name: name,
+	}
+}
+
+func (t *task) run() {
+	args := make(map[string]interface{})
+	for i, depName := range t.dependencies {
+		log("%s waiting for dep %s", t.name, depName)
+		dep := <-t.in[i]
+		args[depName] = dep
+	}
+
+	log("exec %s", t.name)
+
+	v, err := t.fx(args)
+
+	log("ended %s", t.name)
+
+	if v != nil && err == nil && len(t.out) > 0 {
+		for _, out := range t.out {
+			out <- v
+			log("%s sent result", t.name)
+		}
+	}
+}
+
+func (t *task) After(deps ...string) *task {
+	t.dependencies = deps
+	return t
+}
+
+func (t *task) Do(f func(args map[string]interface{}) (interface{}, error)) *task {
+	t.fx = f
+	return t
+}
+
+type task struct {
+	name         string
+	dependencies []string
+	in           []chan interface{}
+	out          []chan interface{}
+	fx           func(args map[string]interface{}) (interface{}, error)
 }
