@@ -13,6 +13,9 @@ func log(format string, a ...interface{}) {
 	}
 }
 
+/*
+ Connects each task input with its dependencies output with a channel
+*/
 func plumb(tasks []*task) {
 	for _, task := range tasks {
 		if len(task.dependencies) > 0 {
@@ -30,6 +33,10 @@ func plumb(tasks []*task) {
 	}
 }
 
+/*
+ Adds another output channel to each task to collect results and
+ Returns an array of output channels with len() = len(tasks)
+*/
 func collector(tasks []*task) []chan interface{} {
 	resCh := make([]chan interface{}, len(tasks))
 
@@ -54,7 +61,7 @@ func Run(tasks ...*task) ([]interface{}, error) {
 	res := make([]interface{}, 0)
 
 	for _, rCh := range resCh {
-		for r := range rCh{
+		for r := range rCh {
 			res = append(res, r)
 		}
 	}
@@ -62,7 +69,7 @@ func Run(tasks ...*task) ([]interface{}, error) {
 	return res, nil
 }
 
-var nop interface{} = func(){}
+var nop interface{} = func() {}
 
 func Task(name string) *task {
 	t := &task{
@@ -115,9 +122,7 @@ func (t *task) After(deps ...string) *task {
 }
 
 func (t *task) Do(fx interface{}) *task {
-	f := reflect.ValueOf(fx)
-	t.fx = f
-
+	t.fx = reflect.ValueOf(fx)
 	return t
 }
 
