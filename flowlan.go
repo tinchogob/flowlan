@@ -24,7 +24,6 @@ func plumb(tasks []*task) {
 					pipe := make(chan interface{})
 					dependency.out = append(dependency.out, pipe)
 					task.in = append(task.in, pipe)
-					log("connecting %s out with %s in", dependency.name, task.name)
 				}
 			}
 		}
@@ -41,7 +40,6 @@ func collector(tasks []*task) []chan interface{} {
 	for i, task := range tasks {
 		resCh[i] = make(chan interface{})
 		task.out = append(task.out, resCh[i])
-		log("setting result channel for %s out", task.name)
 	}
 
 	return resCh
@@ -78,12 +76,9 @@ func Task(name string) *task {
 
 func (t *task) run() {
 	var args []reflect.Value
-	log("%s dependencies are: %v", t.name, t.dependencies)
 	for i, depName := range t.dependencies {
 		log("%s is waiting for dependency %s", t.name, depName)
 		for dep := range t.in[i] {
-			log("%s received %v from dependency %s", t.name, dep, depName)
-
 			vDep := reflect.ValueOf(dep)
 			if vDep.IsValid() {
 				args = append(args, vDep)
@@ -106,7 +101,6 @@ func (t *task) run() {
 				log("%s sending resInterface: %v", t.name, r.Interface())
 				out <- r.Interface()
 			} else {
-				log("%s sending zeroType: %v", t.name, reflect.Zero(t.fx.Type().Out(i)))
 				out <- reflect.Zero(t.fx.Type().Out(i))
 			}
 		}
