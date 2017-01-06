@@ -18,15 +18,13 @@ func log(format string, a ...interface{}) {
 */
 func plumb(tasks []*task) {
 	for _, task := range tasks {
-		if len(task.dependencies) > 0 {
-			for _, dependencyName := range task.dependencies {
-				for _, dependency := range tasks {
-					if dependencyName == dependency.name {
-						pipe := make(chan interface{})
-						dependency.out = append(dependency.out, pipe)
-						task.in = append(task.in, pipe)
-						log("connecting %s out with %s in", dependency.name, task.name)
-					}
+		for _, dependencyName := range task.dependencies {
+			for _, dependency := range tasks {
+				if dependencyName == dependency.name {
+					pipe := make(chan interface{})
+					dependency.out = append(dependency.out, pipe)
+					task.in = append(task.in, pipe)
+					log("connecting %s out with %s in", dependency.name, task.name)
 				}
 			}
 		}
