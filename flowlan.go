@@ -1,20 +1,11 @@
 package flowlan
 
 import (
-	"reflect"
 	"fmt"
+	"reflect"
 )
 
-/*
-TODO list
-- Do: support for variadic functions
-- Do: support for multiple return values
-- Do: support for timeout
-- General: error Handling
-
-*/
-
-var debug bool = true
+var debug bool = false
 
 func log(format string, a ...interface{}) {
 	if debug {
@@ -39,7 +30,7 @@ func plumb(tasks []*task) {
 	}
 }
 
-func collector(tasks []*task) []chan interface {} {
+func collector(tasks []*task) []chan interface{} {
 	resCh := make([]chan interface{}, len(tasks))
 
 	for i, task := range tasks {
@@ -51,9 +42,7 @@ func collector(tasks []*task) []chan interface {} {
 	return resCh
 }
 
-
 func Run(tasks ...*task) ([]interface{}, error) {
-
 	plumb(tasks)
 
 	resCh := collector(tasks)
@@ -62,80 +51,80 @@ func Run(tasks ...*task) ([]interface{}, error) {
 		go task.run()
 	}
 
-	res := make([]interface{}, len(tasks))
+	res := make([]interface{}, 0)
 
-	for i, rCh := range resCh {
-		res[i] = <- rCh
+	for _, rCh := range resCh {
+		for r := range rCh{
+			res = append(res, r)
+		}
 	}
 
 	return res, nil
 }
 
+var nop interface{} = func(){}
+
 func Task(name string) *task {
-	return &task{
+	t := &task{
 		name: name,
 	}
+	return t.Do(nop)
 }
 
-func(t *task) run(){
+func (t *task) run() {
 	var args []reflect.Value
-	if len(t.dependencies) > 0 {
-		for i, depName := range t.dependencies {
-			log("%s is waiting for dependency %s", t.name, depName)
-			dep := <-t.in[i]
+	log("%s dependencies are: %v", t.name, t.dependencies)
+	for i, depName := range t.dependencies {
+		log("%s is waiting for dependency %s", t.name, depName)
+		for dep := range t.in[i] {
 			log("%s received %v from dependency %s", t.name, dep, depName)
 
-			inZeroType := reflect.Zero(t.fx.Type().In(i))
-			if dep != inZeroType {
-				args = append(args, reflect.ValueOf(dep))
+			vDep := reflect.ValueOf(dep)
+			if vDep.IsValid() {
+				args = append(args, vDep)
 			} else {
-				args = append(args, inZeroType)
+				args = append(args, reflect.Zero(t.fx.Type().In(i)))
 			}
 		}
-
 	}
 
-	log("exec %s", t.name)
-	res := t.fx.Call(args)
-	log("ended %s", t.name)
+	log("exec %s with args: %v", t.name, args)
 
-	for i, r := range res {
-		outZeroType := reflect.Zero(t.fx.Type().Out(i))
-		if i == 0 && r != outZeroType {
-			for _, out := range t.out {
-				out <- res[0].Interface()
+	res := t.fx.Call(args)
+
+	log("ended %s with res: %v", t.name, res)
+
+	for _, out := range t.out {
+		for i, r := range res {
+			//technically no fx may return an invalid value as per stated in IsValid() docs
+			if r.IsValid() {
+				log("%s sending resInterface: %v", t.name, r.Interface())
+				out <- r.Interface()
+			} else {
+				log("%s sending zeroType: %v", t.name, reflect.Zero(t.fx.Type().Out(i)))
+				out <- reflect.Zero(t.fx.Type().Out(i))
 			}
 		}
+		close(out)
 	}
 }
 
-func (t *task)After(deps ...string) *task {
-	for _, dep := range deps {
-		if dep == "" {
-			panic("wrong task definition")
-		}
-	}
-
+func (t *task) After(deps ...string) *task {
 	t.dependencies = deps
 	return t
 }
 
 func (t *task) Do(fx interface{}) *task {
 	f := reflect.ValueOf(fx)
-
-	if f.Type().NumIn() != len(t.dependencies) {
-		panic(fmt.Sprintf("wrong task definition: %s: has %d dependencies but %d args\n", t.name, len(t.dependencies), f.Type().NumIn()))
-	}
-
 	t.fx = f
 
 	return t
 }
 
 type task struct {
-	name  string
-	dependencies  []string
-	in    []chan interface{}
-	out   []chan interface{}
-	fx    reflect.Value
+	name         string
+	dependencies []string
+	in           []chan interface{}
+	out          []chan interface{}
+	fx           reflect.Value
 }
