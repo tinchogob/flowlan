@@ -14,9 +14,9 @@ import (
 func main() {
 	res, _ := flowlan.Run(flowlan.Task("times").Do(func() int {
 		return 5
-	}), flowlan.Task("message").Do(func() string {
-		return "golang"
-	}), flowlan.Task("print").After("times","message").Do(func(times int, msg string) string {
+	}), flowlan.Task("message").Do(func() string, error {
+		return "golang", nil
+	}), flowlan.Task("repeat").After("times","message").Do(func(times int, msg string, msgErr error) string {
 		var repeateadMsg string
         for i := 0; i < times; i++ {
             repeateadMsg += msg
@@ -25,7 +25,10 @@ func main() {
 	}))
 
 	fmt.Println(res)
-	//Prints [5 golang golanggolanggolanggolanggolang]
+	//Prints [5 golang <nil> golanggolanggolanggolanggolang]
+	//times task returned- > 5
+	//message task returned- > "golang", nil
+	//repeat task returned golanggolanggolanggolanggolang
 }
 ```
 
@@ -34,8 +37,10 @@ Built on top of go channels (with some reflection magic) as an excersise for go 
 _Do not communicate by sharing memory; instead, share memory by communicating._
 
 TODO list
-- Do: support for variadic functions
-- Do: support for timeout
+- General: flow validation
 - General: error Handling
 - General: cancellable contexts
+- Do: support for variadic functions
+- Do: support for timeout
+
 
