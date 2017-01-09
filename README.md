@@ -9,19 +9,23 @@ import (
     "fmt"
     
     "github.com/tinchogob/flowlan"
-)
+) 
 
 func main() {
-	res, _ := flowlan.Run(flowlan.Task("one").Do(func() string {
-		return "one"
-	}), flowlan.Task("two").Do(func() string {
-		return "two"
-	}), flowlan.Task("trhee").After("one","two").Do(func(one, two string) string {
-		return one+"-"+two+"-"+"three"
+	res, _ := flowlan.Run(flowlan.Task("times").Do(func() int {
+		return 5
+	}), flowlan.Task("message").Do(func() string {
+		return "golang"
+	}), flowlan.Task("print").After("times","message").Do(func(times int, msg string) string {
+		var repeateadMsg string
+        for i := 0; i < times; i++ {
+            repeateadMsg += msg
+        }
+        return repeateadMsg
 	}))
 
 	fmt.Println(res)
-	//Prints [one two one-two-three]
+	//Prints [5 golang golanggolanggolanggolanggolang]
 }
 ```
 
