@@ -176,79 +176,82 @@ func TestRun(t *testing.T) {
 				return []interface{}{(*task)(nil), io.ErrUnexpectedEOF, 5}
 			},
 		},
-		//{
-		//	name: "Flow/After/wrong dependency",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("chabon").Do(func(oneResult int) int {
-		//				return 1+oneResult
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/two many dependencies",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("chabon").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/self dependency",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("two").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/circular dependencies",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").After("three").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("three").After("two").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/deadlock dependencies",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").After("two").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("one").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
+
+		{
+			name: "Flow/After/wrong dependency",
+			tasks: func() []*task {
+				return []*task{
+					Task("one").Do(func() int {
+						return 1
+					}),
+					Task("two").After("chabon").Do(func(oneResult int) int {
+						return 1+oneResult
+					}),
+				}
+			},
+			err: "error",
+		},
+		/*
+		{
+			name: "Flow/After/two many dependencies",
+			tasks: func() []*task {
+				return []*task{
+					Task("one").Do(func() int {
+						return 1
+					}),
+					Task("two").After("chabon").Do(func() int {
+						return 1
+					}),
+				}
+			},
+			err: "error",
+		},
+		{
+			name: "Flow/After/self dependency",
+			tasks: func() []*task {
+				return []*task{
+					Task("one").Do(func() int {
+						return 1
+					}),
+					Task("two").After("two").Do(func() int {
+						return 1
+					}),
+				}
+			},
+			err: "error",
+		},
+		{
+			name: "Flow/After/circular dependencies",
+			tasks: func() []*task {
+				return []*task{
+					Task("one").After("three").Do(func() int {
+						return 1
+					}),
+					Task("two").After("one").Do(func() int {
+						return 1
+					}),
+					Task("three").After("two").Do(func() int {
+						return 1
+					}),
+				}
+			},
+			err: "error",
+		},
+		{
+			name: "Flow/After/deadlock dependencies",
+			tasks: func() []*task {
+				return []*task{
+					Task("one").After("two").Do(func() int {
+						return 1
+					}),
+					Task("two").After("one").Do(func() int {
+						return 1
+					}),
+				}
+			},
+			err: "error",
+		},
+		*/
 	}
 
 	for _, c := range cases {
