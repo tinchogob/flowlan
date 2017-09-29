@@ -6,7 +6,7 @@ import (
 	"reflect"
 )
 
-var debug bool = true
+var debug bool = false
 
 func log(format string, a ...interface{}) {
 	if debug {
@@ -20,13 +20,15 @@ type task struct {
 	name string
 	in   []*dependency
 	out  []*dependency
-	fxi  func(map[string]interface{}) (interface{}, error)
+	fx   fx
 }
 
 type dependency struct {
 	name string
 	res  chan interface{}
 }
+
+type fx func(map[string]interface{}) (interface{}, error)
 
 //Runs tasks as soon as all its dependencies are ready.
 //Returns a map[string]interface{} with each task results
@@ -72,21 +74,19 @@ func (t *task) After(deps ...string) *task {
 	return t
 }
 
-func (t *task) IDo(fx func(map[string]interface{}) (interface{}, error)) *task {
-	t.fxi = fx
+func (t *task) IDo(f fx) *task {
+	t.fx = f
 	return t
 }
 
 func (t *task) Do(fx interface{}) *task {
-	t.fxi = t.toFxi(reflect.ValueOf(fx))
+	t.fx = t.toFx(reflect.ValueOf(fx))
 	return t
 }
 
 func plumb(tasks []*task) {
 	for _, task := range tasks {
-		log("plumbing task: %s ", task.name)
 		for _, inDep := range task.in {
-			log("%s depends on %s", task.name, inDep.name)
 			for _, aTask := range tasks {
 				if aTask.name == inDep.name {
 					log("connecting %s in with %s out", task.name, inDep.name)
@@ -115,11 +115,11 @@ func (t *task) irun(ctx context.Context, errors chan error) chan interface{} {
 			}
 		}
 
-		if t.fxi == nil {
+		if t.fx == nil {
 			return
 		}
 
-		res, err := t.fxi(args)
+		res, err := t.fx(args)
 
 		if err != nil {
 			select {
@@ -130,7 +130,7 @@ func (t *task) irun(ctx context.Context, errors chan error) chan interface{} {
 		}
 
 		for _, outDep := range t.out {
-			log("%s sending: %v to", t.name, res, outDep.name)
+			log("%s sending: %v to %s", t.name, res, outDep.name)
 			select {
 			case <-ctx.Done():
 			case outDep.res <- res:
@@ -145,28 +145,40 @@ func (t *task) irun(ctx context.Context, errors chan error) chan interface{} {
 	return resCh
 }
 
-func (t *task) toFxi(fx reflect.Value) func(map[string]interface{}) (interface{}, error) {
+func (t *task) toFx(fx reflect.Value) fx {
 	return func(arguments map[string]interface{}) (interface{}, error) {
 
 		//args := make([]reflect.Value, len(t.in))
 		var args []reflect.Value
 
 		for i, dep := range t.in {
-			vDep := reflect.ValueOf(arguments[dep.name])
-			if vDep.IsValid() {
-				args = append(args, vDep)
-			} else {
-				args = append(args, reflect.Zero(reflect.TypeOf(fx.Type().In(i))))
+			log("%s args are: %v", t.name, arguments[dep.name].([]interface{}))
+			argsAsArray := arguments[dep.name].([]interface{})
+			for _, v := range argsAsArray {
+				vDep := reflect.ValueOf(v)
+				if vDep.IsValid() {
+					args = append(args, vDep)
+				} else {
+					args = append(args, reflect.Zero(reflect.TypeOf(fx.Type().In(i))))
+				}
 			}
 		}
 
 		log("calling reflect fx with: %v", args)
 		ret := fx.Call(args)
 
+		var res []interface{}
 		var err error
-		if ret[1].IsValid() && ret[1].Interface() != nil {
-			err = ret[1].Interface().(error)
+
+		for i, r := range ret {
+			//last return value must be of type error
+			if i == len(ret)-1 && r.IsValid() && r.Interface() != nil {
+				err = r.Interface().(error)
+			} else if i < len(ret)-1 {
+				res = append(res, r.Interface())
+			}
 		}
-		return ret[0].Interface(), err
+
+		return res, err
 	}
 }
