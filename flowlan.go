@@ -1,127 +1,151 @@
 package flowlan
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 )
 
-var debug bool = false
+// Debug controls if flowland logs some useful debugging info to stdout
+var Debug = false
 
 func log(format string, a ...interface{}) {
-	if debug {
+	if Debug {
 		fmt.Printf(format+"\n", a...)
 	}
 }
 
-/*
- Connects each task input with its dependencies output with a channel
-*/
-func plumb(tasks []*task) {
+// Task defines a task to be runned by flowlan
+// Each Task will run on a separate go routine
+type Task struct {
+	Name string
+	in   []*dependency
+	out  []*dependency
+	fx   interface{}
+}
+
+type dependency struct {
+	name string
+	res  chan reflect.Value
+}
+
+// Run runs tasks as soon as each dependencies finish
+func Run(ctx context.Context, tasks ...*Task) error {
+	err := plumb(tasks)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errors := make(chan error)
+	var tasksPending []chan struct{}
 	for _, task := range tasks {
-		for _, dependencyName := range task.dependencies {
-			for _, dependency := range tasks {
-				if dependencyName == dependency.name {
-					pipe := make(chan interface{})
-					dependency.out = append(dependency.out, pipe)
-					task.in = append(task.in, pipe)
+		if task.fx != nil {
+			tasksPending = append(tasksPending, task.run(ctx, errors))
+		}
+	}
+
+	for _, pendingTask := range tasksPending {
+		select {
+		case <-ctx.Done():
+		case <-pendingTask:
+		case err := <-errors:
+			cancel()
+			return err
+		}
+	}
+	return nil
+}
+
+// Defines the task name to be runned by flowlan
+func Step(name string) *Task {
+	return &Task{
+		Name: name,
+	}
+}
+
+func (t *Task) After(deps ...string) *Task {
+	for _, dep := range deps {
+		t.in = append(t.in, &dependency{dep, nil})
+	}
+
+	return t
+}
+
+func (t *Task) Do(fx interface{}) *Task {
+	t.fx = fx
+	return t
+}
+
+func plumb(tasks []*Task) error {
+	for _, task := range tasks {
+		for _, inDep := range task.in {
+			var found bool
+			for _, aTask := range tasks {
+				if aTask.Name == inDep.name {
+					found = true
+					log("connecting %s in with %s out", task.Name, inDep.name)
+					inDep.res = make(chan reflect.Value)
+					aTask.out = append(aTask.out, &dependency{task.Name, inDep.res})
 				}
 			}
-		}
-	}
-}
-
-/*
- Adds another output channel to each task to collect results and
- Returns an array of output channels with len() = len(tasks)
-*/
-func collector(tasks []*task) []chan interface{} {
-	resCh := make([]chan interface{}, len(tasks))
-
-	for i, task := range tasks {
-		resCh[i] = make(chan interface{})
-		task.out = append(task.out, resCh[i])
-	}
-
-	return resCh
-}
-
-func Run(tasks ...*task) ([]interface{}, error) {
-	plumb(tasks)
-
-	resCh := collector(tasks)
-
-	for _, task := range tasks {
-		go task.run()
-	}
-
-	res := make([]interface{}, 0)
-
-	for _, rCh := range resCh {
-		for r := range rCh {
-			res = append(res, r)
-		}
-	}
-
-	return res, nil
-}
-
-var nop interface{} = func() {}
-
-func Task(name string) *task {
-	t := &task{
-		name: name,
-	}
-	return t.Do(nop)
-}
-
-func (t *task) run() {
-	var args []reflect.Value
-	for i, depName := range t.dependencies {
-		log("%s is waiting for dependency %s", t.name, depName)
-		for dep := range t.in[i] {
-			vDep := reflect.ValueOf(dep)
-			if vDep.IsValid() {
-				args = append(args, vDep)
-			} else {
-				args = append(args, reflect.Zero(t.fx.Type().In(i)))
+			if !found || inDep.name == task.Name {
+				return errors.New("invalid task definition")
 			}
 		}
 	}
+	return nil
+}
 
-	log("exec %s with args: %v", t.name, args)
+var nilErrorValue = reflect.ValueOf(new(error)).Elem()
 
-	res := t.fx.Call(args)
+func (t *Task) run(ctx context.Context, errors chan error) chan struct{} {
 
-	log("ended %s with res: %v", t.name, res)
+	done := make(chan struct{})
 
-	for _, out := range t.out {
-		for i, r := range res {
-			//technically no fx may return an invalid value as per stated in IsValid() docs
-			if r.IsValid() {
-				log("%s sending resInterface: %v", t.name, r.Interface())
-				out <- r.Interface()
-			} else {
-				out <- reflect.Zero(t.fx.Type().Out(i))
+	go func() {
+
+		fx := reflect.ValueOf(t.fx)
+		numIn := fx.Type().NumIn()
+
+		args := []reflect.Value{}
+		for depIndex, inDep := range t.in {
+			argCount := 0
+			log("%d: %s is waiting for dependency %s", depIndex, t.Name, inDep.name)
+			for anInDepRes := range inDep.res {
+				log("%s received arg number %d with value %v from dependecy %s", t.Name, argCount, anInDepRes, inDep.name)
+				if argCount >= numIn {
+					log("%s is skipping arg number %d from dependency %s", t.Name, argCount, inDep.name)
+					continue
+					// } else if fx.Type().In(i) == nilErrorValue.Type() {
+					// 	log("%s is appending arg number %d with nilErrorValue from dependency %s", t.Name, i, inDep.name)
+					// 	args = append(args, nilErrorValue)
+				} else {
+					log("%s is appending arg number %d with %v from dependency %s", t.Name, argCount, anInDepRes, inDep.name)
+					args = append(args, anInDepRes)
+				}
+				argCount++
 			}
 		}
-		close(out)
-	}
-}
 
-func (t *task) After(deps ...string) *task {
-	t.dependencies = deps
-	return t
-}
+		log("calling fx with %d/%d", len(args), numIn)
+		res := fx.Call(args)
 
-func (t *task) Do(fx interface{}) *task {
-	t.fx = reflect.ValueOf(fx)
-	return t
-}
+		for _, outDep := range t.out {
+			log("%s sending: %v to %s", t.Name, res, outDep.name)
+			for _, outDepRes := range res {
+				select {
+				case <-ctx.Done():
+				case outDep.res <- outDepRes:
+				}
+			}
+			close(outDep.res)
+		}
 
-type task struct {
-	name         string
-	dependencies []string
-	in           []chan interface{}
-	out          []chan interface{}
-	fx           reflect.Value
+		close(done)
+	}()
+	return done
 }

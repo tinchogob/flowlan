@@ -1,383 +1,211 @@
 package flowlan
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"testing"
-	"time"
 )
 
 func TestRun(t *testing.T) {
-	mock := new(task)
-
+	Debug = true
 	cases := []struct {
-		name    string
-		tasks   func() []*task
-		results func() []interface{}
-		err     string
+		name  string
+		tasks func() []*Task
+		err   string
 	}{
 		{
-			name: "Task/Do/no action",
-			tasks: func() []*task {
-				return []*task{Task("Tincho")}
-			},
-			results: func() []interface{} {
-				return []interface{}{}
+			name: "Step/Do/no action",
+			tasks: func() []*Task {
+				return []*Task{Step("Tincho")}
 			},
 		},
 		{
-			name: "Task/Do/no return value",
-			tasks: func() []*task {
-				return []*task{Task("Tincho").Do(func() {
-					//Do some work
-				})}
-			},
-			results: func() []interface{} {
-				return []interface{}{}
+			name: "Step/Do/no return values",
+			tasks: func() []*Task {
+				return []*Task{
+					Step("one").Do(func() {}),
+					Step("two").After("one").Do(func() {}),
+				}
 			},
 		},
 		{
-			name: "Task/Do/1 return value",
-			tasks: func() []*task {
-				return []*task{Task("one").Do(func() int {
-					return 1
-				})}
-			},
-			results: func() []interface{} {
-				return []interface{}{1}
-			},
-		},
-		{
-			name: "Task/Do/zero value return",
-			tasks: func() []*task {
-				return []*task{Task("Tincho").Do(func() int {
-					return 0
-				})}
-			},
-			results: func() []interface{} {
-				return []interface{}{0}
-			},
-		},
-		{
-			name: "Task/Do/zero value return interface value",
-			tasks: func() []*task {
-				return []*task{Task("Tincho").Do(func() interface{} {
-					return nil
-				})}
-			},
-			results: func() []interface{} {
-				return []interface{}{nil}
+			name: "Step/Do/return values",
+			tasks: func() []*Task {
+				return []*Task{
+					Step("one").Do(func() int {
+						return 1
+					}),
+					Step("two").After("one").Do(func(one int) {
+						if one != 1 {
+							t.Fail()
+						}
+					}),
+				}
 			},
 		},
 		{
 			name: "Task/Do/multiple return values",
-			tasks: func() []*task {
-				return []*task{Task("multiple").Do(func() (int, int) {
-					return 1, 2
-				})}
-			},
-			results: func() []interface{} {
-				return []interface{}{1, 2}
-			},
-		},
-		{
-			name: "Task/Do/multiple dependency return values",
-			tasks: func() []*task {
-				return []*task{
-					Task("multiple_1").Do(func() (int, int) {
-						return 1, 1
+			tasks: func() []*Task {
+				return []*Task{
+					Step("multiple").Do(func() (int, int) {
+						return 1, 2
 					}),
-					Task("dependant").After("multiple_1").Do(func(d1, d2 int) int {
-						return d1 + d2 + 1
+					Step("last").After("multiple").Do(func(one, two int) {
+						if one != 1 {
+							t.Fail()
+						}
+						if two != 2 {
+							t.Fail()
+						}
 					}),
 				}
-			},
-			results: func() []interface{} {
-				return []interface{}{1, 1, 3}
 			},
 		},
 		{
 			name: "Task/Do/error return value",
-			tasks: func() []*task {
-				return []*task{
-					Task("multiple_1").Do(func() error {
-						return io.ErrNoProgress
+			tasks: func() []*Task {
+				return []*Task{
+					Step("first").Do(func() error {
+						return errors.New("lala")
 					}),
-					Task("multiple_2").After("multiple_1").Do(func(e1 error) int {
-						return 1
+					Step("last").After("first").Do(func(e1 error) {
+						if e1 == nil {
+							fmt.Println("no deberia ser nil")
+							t.Fail()
+						}
+						if e1.Error() != "lala" {
+							t.Fail()
+						}
 					}),
 				}
-			},
-			results: func() []interface{} {
-				return []interface{}{io.ErrNoProgress, 1}
 			},
 		},
 		{
 			name: "Task/Do/zero return value error",
-			tasks: func() []*task {
-				return []*task{
-					Task("zre_1").Do(func() error {
+			tasks: func() []*Task {
+				return []*Task{
+					Step("zre_1").Do(func() error {
 						return nil
 					}),
-					Task("zre_2").After("zre_1").Do(func(e1 error) int {
-						return 1
+					Step("zre_2").After("zre_1").Do(func(e1 error) {
+						if e1 != nil {
+							fmt.Println("deberia ser nil")
+							t.Fail()
+						}
 					}),
 				}
-			},
-			results: func() []interface{} {
-				return []interface{}{nil, 1}
 			},
 		},
 		{
 			name: "Task/Do/return value ptr",
-			tasks: func() []*task {
-				return []*task{
-					Task("s_1").Do(func() *task {
-						mock.name = "tinchogob"
-						return mock
+			tasks: func() []*Task {
+				return []*Task{
+					Step("s_1").Do(func() *string {
+						str := "tinchogob"
+						return &str
 					}),
-					Task("s_2").After("s_1").Do(func(s1 *task) string {
-						return "el nombre es: " + s1.name
+					Step("s_2").After("s_1").Do(func(s1 *string) string {
+						return "el nombre es: " + *s1
 					}),
 				}
-			},
-			results: func() []interface{} {
-				return []interface{}{mock, "el nombre es: tinchogob"}
 			},
 		},
 		{
 			name: "Task/Do/return zero value ptr",
-			tasks: func() []*task {
-				return []*task{
-					Task("p_1").Do(func() *task {
+			tasks: func() []*Task {
+				return []*Task{
+					Step("p_1").Do(func() *Task {
 						return nil
 					}),
-					Task("p_2").After("p_1").Do(func(s1 *task) string {
+					Step("p_2").After("p_1").Do(func(s1 *Task) string {
 						return "hola"
 					}),
 				}
 			},
-			results: func() []interface{} {
-				return []interface{}{(*task)(nil), "hola"}
-			},
 		},
 		{
 			name: "Task/Do/return errors",
-			tasks: func() []*task {
-				return []*task{
-					Task("p_1").Do(func() (*task, error) {
+			tasks: func() []*Task {
+				return []*Task{
+					Step("p_1").Do(func() (*Task, error) {
 						return nil, io.ErrUnexpectedEOF
 					}),
-					Task("p_2").After("p_1").Do(func(s1 *task, e1 error) int {
+					Step("p_2").After("p_1").Do(func(s1 *Task, e1 error) int {
 						return 5
 					}),
 				}
 			},
-			results: func() []interface{} {
-				return []interface{}{(*task)(nil), io.ErrUnexpectedEOF, 5}
-			},
 		},
-		//{
-		//	name: "Flow/After/wrong dependency",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("chabon").Do(func(oneResult int) int {
-		//				return 1+oneResult
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/two many dependencies",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("chabon").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/self dependency",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("two").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/circular dependencies",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").After("three").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("one").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("three").After("two").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-		//{
-		//	name: "Flow/After/deadlock dependencies",
-		//	tasks: func() []*task {
-		//		return []*task{
-		//			Task("one").After("two").Do(func() int {
-		//				return 1
-		//			}),
-		//			Task("two").After("one").Do(func() int {
-		//				return 1
-		//			}),
-		//		}
-		//	},
-		//	err: "error",
-		//},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			res, err := Run(c.tasks()...)
-			if err != nil {
-				if c.err == err.Error() {
-					t.Fatalf("%s: expected %s error but got %s", c.name, c.err, err.Error())
-				}
-			} else {
-				if c.err != "" {
-					t.Fatalf("%s: expected %s ", c.name, c.err)
-				}
-
-				results := c.results()
-
-				if len(res) != len(results) {
-					t.Fatalf("%s: expected %s results but got %s", c.name, len(results), len(res))
-				}
-
-				for i, r := range res {
-					if r != results[i] {
-						t.Errorf("%s: expected %v but got %v", c.name, results[i], r)
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestFlow(t *testing.T) {
-	cases := []struct {
-		name  string
-		tasks func() []*task
-		err   string
-	}{
 		{
-			name: "Flow/After/1 dependency",
-			tasks: func() []*task {
-				return []*task{
-					Task("one").Do(func() time.Time {
-						return time.Now()
-					}),
-					Task("two").After("one").Do(func(oneResult time.Time) time.Time {
-						return time.Now()
+			name: "Flow/Do/many args",
+			tasks: func() []*Task {
+				return []*Task{
+					Step("one").Do(func() (string, error) {
+						return "one", nil
+					}), Step("two").Do(func() (string, string, error) {
+						return "two", "two", nil
+					}), Step("three").After("one", "two").Do(func(one string, oneErr error, two, twoo string, toErr error) (string, error) {
+						return one + "-" + two + "-" + twoo + "-" + "three", nil
 					}),
 				}
 			},
 		},
 		{
-			name: "Flow/After/2 dependency",
-			tasks: func() []*task {
-				return []*task{
-					Task("one").Do(func() time.Time {
-						return time.Now()
+			name: "Flow/After/wrong dependency",
+			tasks: func() []*Task {
+				return []*Task{
+					Step("one").Do(func() int {
+						return 1
 					}),
-					Task("two").After("one").Do(func(oneResult time.Time) time.Time {
-						return time.Now()
-					}),
-					Task("three").After("one", "two").Do(func(oneResult, twoResult time.Time) time.Time {
-						return time.Now()
+					Step("two").After("chabon").Do(func(oneResult int) int {
+						return 1 + oneResult
 					}),
 				}
 			},
+			err: "invalid task definition",
 		},
 		{
-			name: "Flow/After/3 dependency",
-			tasks: func() []*task {
-				return []*task{
-					Task("one").Do(func() time.Time {
-						return time.Now()
+			name: "Flow/After/two many dependencies",
+			tasks: func() []*Task {
+				return []*Task{
+					Step("one").Do(func() int {
+						return 1
 					}),
-					Task("two").After("one").Do(func(oneResult time.Time) time.Time {
-						return time.Now()
-					}),
-					Task("three").After("one", "two").Do(func(oneResult, twoResult time.Time) time.Time {
-						return time.Now()
-					}),
-					Task("four").After("one").Do(func(oneResult time.Time) time.Time {
-						return time.Now()
+					Step("two").After("chabon", "chabona").Do(func() int {
+						return 1
 					}),
 				}
 			},
+			err: "invalid task definition",
 		},
 		{
-			name: "Flow/After/4 dependency",
-			tasks: func() []*task {
-				return []*task{
-					Task("one").Do(func() time.Time {
-						return time.Now()
+			name: "Flow/After/self dependency",
+			tasks: func() []*Task {
+				return []*Task{
+					Step("one").Do(func() int {
+						return 1
 					}),
-					Task("two").After("one").Do(func(oneResult time.Time) time.Time {
-						return time.Now()
-					}),
-					Task("three").After("one", "two").Do(func(oneResult, twoResult time.Time) time.Time {
-						return time.Now()
-					}),
-					Task("four").After("one").Do(func(oneResult time.Time) time.Time {
-						return time.Now()
-					}),
-					Task("five").After("three", "four").Do(func(threeResult, fourResult time.Time) time.Time {
-						return time.Now()
+					Step("two").After("two").Do(func() int {
+						return 1
 					}),
 				}
 			},
+			err: "invalid task definition",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			tasks := c.tasks()
-			res, err := Run(tasks...)
+			err := Run(context.TODO(), c.tasks()...)
 			if err != nil {
-				if c.err == err.Error() {
+				if c.err != err.Error() {
 					t.Fatalf("%s: expected %s error but got %s", c.name, c.err, err.Error())
 				}
 			} else {
 				if c.err != "" {
 					t.Fatalf("%s: expected %s ", c.name, c.err)
-				}
-
-				for i, task := range tasks {
-					for _, dep := range task.dependencies {
-						for j, depT := range tasks {
-							if dep == depT.name && res[j].(time.Time).After(res[i].(time.Time)) {
-								t.Errorf("%s: %s expected to be after %s ((%v is not after %v))", c.name, task.name, dep, res[j], res[i])
-							}
-						}
-					}
 				}
 			}
 		})
