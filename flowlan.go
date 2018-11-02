@@ -6,18 +6,21 @@ import (
 	"reflect"
 )
 
-var debug bool = false
+// Debug controls if flowland logs some useful debugging info to stdout
+var Debug = true
 
 func log(format string, a ...interface{}) {
-	if debug {
+	if Debug {
 		fmt.Printf(format+"\n", a...)
 	}
 }
 
 var nop interface{} = func() {}
 
-type task struct {
-	name string
+// Task defines a task to be runned by flowlan
+// Each Task will run on a separate go routine
+type Task struct {
+	Name string
 	in   []*dependency
 	out  []*dependency
 	fx   fx
@@ -30,43 +33,48 @@ type dependency struct {
 
 type fx func(map[string]interface{}) (interface{}, error)
 
-//Runs tasks as soon as all its dependencies are ready.
-//Returns a map[string]interface{} with each task results
-func Run(tasks ...*task) (map[string]interface{}, error) {
+// Run runs tasks as soon as each dependencies finish
+func Run(tasks ...*Task) error {
+	return run(context.Background(), tasks...)
+}
+
+// RunWithContext runs tasks as soon as each dependencies finish
+func RunWithContext(ctx context.Context, tasks ...*Task) error {
+	return run(ctx, tasks...)
+}
+
+func run(ctx context.Context, tasks ...*Task) error {
 	plumb(tasks)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	resChs := make(map[string]chan interface{})
 	errors := make(chan error)
-
-	res := make(map[string]interface{})
-
+	var tasksPending []chan struct{}
 	for _, task := range tasks {
-		resChs[task.name] = task.irun(ctx, errors)
+		tasksPending = append(tasksPending, task.run(ctx, errors))
 	}
 
-	for _, task := range tasks {
+	for _, pendingTask := range tasksPending {
 		select {
-		case res[task.name] = <-resChs[task.name]:
+		case <-ctx.Done():
+		case <-pendingTask:
 		case err := <-errors:
 			cancel()
-			return nil, err
+			return err
 		}
 	}
-
-	return res, nil
+	return nil
 }
 
-//The Task to run
-func Task(name string) *task {
-	return &task{
-		name: name,
+// Defines the task name to be runned by flowlan
+func Step(name string) *Task {
+	return &Task{
+		Name: name,
 	}
 }
 
-func (t *task) After(deps ...string) *task {
+func (t *Task) After(deps ...string) *Task {
 	for _, dep := range deps {
 		t.in = append(t.in, &dependency{dep, nil})
 	}
@@ -74,40 +82,38 @@ func (t *task) After(deps ...string) *task {
 	return t
 }
 
-func (t *task) IDo(f fx) *task {
+func (t *Task) IDo(f fx) *Task {
 	t.fx = f
 	return t
 }
 
-func (t *task) Do(fx interface{}) *task {
+func (t *Task) Do(fx interface{}) *Task {
 	t.fx = t.toFx(reflect.ValueOf(fx))
 	return t
 }
 
-func plumb(tasks []*task) {
+func plumb(tasks []*Task) {
 	for _, task := range tasks {
 		for _, inDep := range task.in {
 			for _, aTask := range tasks {
-				if aTask.name == inDep.name {
-					log("connecting %s in with %s out", task.name, inDep.name)
+				if aTask.Name == inDep.name {
+					log("connecting %s in with %s out", task.Name, inDep.name)
 					pipe := make(chan interface{})
 					inDep.res = pipe
-					aTask.out = append(aTask.out, &dependency{task.name, pipe})
+					aTask.out = append(aTask.out, &dependency{task.Name, pipe})
 				}
 			}
 		}
 	}
 }
 
-func (t *task) irun(ctx context.Context, errors chan error) chan interface{} {
-	resCh := make(chan interface{})
+func (t *Task) run(ctx context.Context, errors chan error) chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		defer close(resCh)
-
 		args := make(map[string]interface{})
 
 		for _, inDep := range t.in {
-			log("%s is waiting for dependency %s", t.name, inDep.name)
+			log("%s is waiting for dependency %s", t.Name, inDep.name)
 			select {
 			case args[inDep.name] = <-inDep.res:
 			case <-ctx.Done():
@@ -116,6 +122,7 @@ func (t *task) irun(ctx context.Context, errors chan error) chan interface{} {
 		}
 
 		if t.fx == nil {
+			close(done)
 			return
 		}
 
@@ -130,29 +137,25 @@ func (t *task) irun(ctx context.Context, errors chan error) chan interface{} {
 		}
 
 		for _, outDep := range t.out {
-			log("%s sending: %v to %s", t.name, res, outDep.name)
+			log("%s sending: %v to %s", t.Name, res, outDep.name)
 			select {
 			case <-ctx.Done():
 			case outDep.res <- res:
 				close(outDep.res)
-				resCh <- res
 			}
 		}
-
-		resCh <- res
+		close(done)
 	}()
-
-	return resCh
+	return done
 }
 
-func (t *task) toFx(fx reflect.Value) fx {
+func (t *Task) toFx(fx reflect.Value) fx {
 	return func(arguments map[string]interface{}) (interface{}, error) {
 
-		//args := make([]reflect.Value, len(t.in))
-		var args []reflect.Value
+		args := []reflect.Value{}
 
 		for i, dep := range t.in {
-			log("%s args are: %v", t.name, arguments[dep.name].([]interface{}))
+			log("%s args are: %v", t.Name, arguments[dep.name].([]interface{}))
 			argsAsArray := arguments[dep.name].([]interface{})
 			for _, v := range argsAsArray {
 				vDep := reflect.ValueOf(v)
@@ -164,16 +167,21 @@ func (t *task) toFx(fx reflect.Value) fx {
 			}
 		}
 
-		log("calling reflect fx with: %v", args)
+		log("%s is calling its reflect fx with: %v", t.Name, args)
 		ret := fx.Call(args)
 
 		var res []interface{}
 		var err error
+		var ok bool
 
 		for i, r := range ret {
 			//last return value must be of type error
 			if i == len(ret)-1 && r.IsValid() && r.Interface() != nil {
-				err = r.Interface().(error)
+				err, ok = r.Interface().(error)
+				if !ok {
+					res = append(res, r.Interface())
+					err = nil
+				}
 			} else if i < len(ret)-1 {
 				res = append(res, r.Interface())
 			}
