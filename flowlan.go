@@ -2,7 +2,6 @@ package flowlan
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 )
@@ -22,7 +21,7 @@ type Task struct {
 	Name string
 	in   []*dependency
 	out  []*dependency
-	fx   interface{}
+	fx   reflect.Value
 }
 
 type dependency struct {
@@ -30,43 +29,14 @@ type dependency struct {
 	res  chan reflect.Value
 }
 
-// Run runs tasks as soon as each dependencies finish
-func Run(ctx context.Context, tasks ...*Task) error {
-	err := plumb(tasks)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	errors := make(chan error)
-	var tasksPending []chan struct{}
-	for _, task := range tasks {
-		if task.fx != nil {
-			tasksPending = append(tasksPending, task.run(ctx, errors))
-		}
-	}
-
-	for _, pendingTask := range tasksPending {
-		select {
-		case <-ctx.Done():
-		case <-pendingTask:
-		case err := <-errors:
-			cancel()
-			return err
-		}
-	}
-	return nil
-}
-
-// Defines the task name to be runned by flowlan
+// Task constructor
 func Step(name string) *Task {
 	return &Task{
 		Name: name,
 	}
 }
 
+// Defines the task dependencies. The task will run when all its dependencies are done
 func (t *Task) After(deps ...string) *Task {
 	for _, dep := range deps {
 		t.in = append(t.in, &dependency{dep, nil})
@@ -75,43 +45,89 @@ func (t *Task) After(deps ...string) *Task {
 	return t
 }
 
+// The func to run
 func (t *Task) Do(fx interface{}) *Task {
-	t.fx = fx
+	t.fx = reflect.ValueOf(fx)
 	return t
+}
+
+// Run runs tasks in order as soon as their dependencies
+// finishes with its results as argunments
+func Run(ctx context.Context, tasks ...*Task) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	err := plumb(tasks)
+	if err != nil {
+		return err
+	}
+
+	var tasksPending []chan struct{}
+	for _, task := range tasks {
+		if task.fx.IsValid() {
+			log("running %s", task.Name)
+			tasksPending = append(tasksPending, task.run(ctx))
+		}
+	}
+
+	for _, pendingTask := range tasksPending {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-pendingTask:
+		}
+	}
+
+	return nil
 }
 
 func plumb(tasks []*Task) error {
 	for _, task := range tasks {
+
+		//Skip nop tasks
+		if !task.fx.IsValid() {
+			continue
+		}
+
+		var args int
 		for _, inDep := range task.in {
+
+			//catch self dependencies
+			if inDep.name == task.Name {
+				return fmt.Errorf("invalid task definition: circular dependency on %s", task.Name)
+			}
+
 			var found bool
 			for _, aTask := range tasks {
 				if aTask.Name == inDep.name {
 					found = true
+					args += aTask.fx.Type().NumOut()
 					log("connecting %s in with %s out", task.Name, inDep.name)
 					inDep.res = make(chan reflect.Value)
 					aTask.out = append(aTask.out, &dependency{task.Name, inDep.res})
 				}
 			}
-			if !found || inDep.name == task.Name {
-				return errors.New("invalid task definition")
+			if !found {
+				return fmt.Errorf("invalid task definition: %s unknown dependency %s", task.Name, inDep.name)
 			}
+		}
+
+		if args != task.fx.Type().NumIn() {
+			return fmt.Errorf("invalid task definition: %s has %d arguments but got only %d", task.Name, task.fx.Type().NumIn(), args)
 		}
 	}
 	return nil
 }
 
-var nilErrorValue = reflect.ValueOf(new(error)).Elem()
-
-func (t *Task) run(ctx context.Context, errors chan error) chan struct{} {
-
+func (t *Task) run(ctx context.Context) chan struct{} {
 	done := make(chan struct{})
 
 	go func() {
 
-		fx := reflect.ValueOf(t.fx)
-		numIn := fx.Type().NumIn()
-
+		numIn := t.fx.Type().NumIn()
 		args := []reflect.Value{}
+
 		for depIndex, inDep := range t.in {
 			argCount := 0
 			log("%d: %s is waiting for dependency %s", depIndex, t.Name, inDep.name)
@@ -120,9 +136,6 @@ func (t *Task) run(ctx context.Context, errors chan error) chan struct{} {
 				if argCount >= numIn {
 					log("%s is skipping arg number %d from dependency %s", t.Name, argCount, inDep.name)
 					continue
-					// } else if fx.Type().In(i) == nilErrorValue.Type() {
-					// 	log("%s is appending arg number %d with nilErrorValue from dependency %s", t.Name, i, inDep.name)
-					// 	args = append(args, nilErrorValue)
 				} else {
 					log("%s is appending arg number %d with %v from dependency %s", t.Name, argCount, anInDepRes, inDep.name)
 					args = append(args, anInDepRes)
@@ -132,7 +145,7 @@ func (t *Task) run(ctx context.Context, errors chan error) chan struct{} {
 		}
 
 		log("calling fx with %d/%d", len(args), numIn)
-		res := fx.Call(args)
+		res := t.fx.Call(args)
 
 		for _, outDep := range t.out {
 			log("%s sending: %v to %s", t.Name, res, outDep.name)
@@ -147,5 +160,6 @@ func (t *Task) run(ctx context.Context, errors chan error) chan struct{} {
 
 		close(done)
 	}()
+
 	return done
 }
