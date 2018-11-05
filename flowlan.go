@@ -79,7 +79,7 @@ func Run(ctx context.Context, tasks ...*Task) error {
 		}
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 func plumb(tasks []*Task) error {
@@ -144,16 +144,21 @@ func (t *Task) run(ctx context.Context) chan struct{} {
 			}
 		}
 
+		if ctx.Err() != nil {
+			return
+		}
+
 		log("calling fx with %d/%d", len(args), numIn)
 		res := t.fx.Call(args)
+
+		if ctx.Err() != nil {
+			return
+		}
 
 		for _, outDep := range t.out {
 			log("%s sending: %v to %s", t.Name, res, outDep.name)
 			for _, outDepRes := range res {
-				select {
-				case <-ctx.Done():
-				case outDep.res <- outDepRes:
-				}
+				outDep.res <- outDepRes
 			}
 			close(outDep.res)
 		}
